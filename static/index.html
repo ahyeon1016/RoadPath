@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RoadPath</title>
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20261005-multi1">
+</head>
+<body>
+    <header class="topbar">
+        <h1>RoadPath</h1>
+    </header>
+
+    <main class="layout">
+        <aside class="chat-panel" aria-label="경로 요청 대화">
+            <div class="panel-heading">
+                <div>
+                    <span class="section-kicker">경로 요청</span>
+                    <h2>어디로 이동하시나요?</h2>
+                </div>
+                <span class="agent-dot" aria-hidden="true"></span>
+            </div>
+
+            <div id="chatMessages" class="messages" aria-live="polite">
+                <div class="message agent-message">
+                    <div class="message-label">RoadPath</div>
+                    <p>목적지만 말하면 해당 요청에서만 현재 위치를 확인해 길을 찾습니다.</p>
+                </div>
+            </div>
+
+            <form id="routeForm" class="composer">
+                <label for="routeInput" class="sr-only">이동 요청</label>
+                <textarea id="routeInput" rows="2" placeholder="예: 부산대학교까지 길 안내해줘"></textarea>
+                <div class="composer-controls">
+                    <div class="quick-actions">
+                        <button id="voiceButton" class="secondary-button" type="button" aria-pressed="false">음성</button>
+                    </div>
+                    <button id="submitButton" type="submit">경로 탐색</button>
+                </div>
+                <div id="inputHint" class="input-hint">현재 위치가 필요한 요청에서만 위치 권한을 사용합니다.</div>
+            </form>
+        </aside>
+
+        <section class="workspace">
+            <nav class="tabs" aria-label="결과 화면">
+                <button class="tab active" data-tab="route" type="button">경로 보기</button>
+                <button class="tab" data-tab="agent" type="button">탐색 과정</button>
+                <button class="tab" data-tab="segments" type="button">교통 구간</button>
+            </nav>
+
+            <section id="tab-route" class="tab-panel route-panel active">
+                <div class="map-card">
+                    <div class="map-toolbar">
+                        <div class="map-title-wrap">
+                            <span class="section-kicker">경로 지도</span>
+                            <strong id="mapTitle">경로를 탐색하면 지도에 표시됩니다.</strong>
+                        </div>
+                        <div class="map-actions">
+                            <div id="routeSwitch" class="route-switch" aria-label="표시 경로"></div>
+                            <button id="navigationStartButton" class="navigation-start" type="button" hidden>내비게이션 시작</button>
+                        </div>
+                    </div>
+
+                    <div class="map-stage">
+                        <div id="map" aria-label="경로 지도"></div>
+                        <div id="mapFallback" class="map-fallback" hidden>
+                            지도를 불러오지 못했습니다. 경로 결과와 교통 구간은 계속 확인할 수 있습니다.
+                        </div>
+
+                        <section id="navigationHud" class="navigation-hud" hidden aria-live="polite">
+                            <div class="nav-main">
+                                <span class="nav-kicker">주행 안내</span>
+                                <strong id="navInstruction">경로를 따라 이동하세요.</strong>
+                                <span id="navRoad" class="nav-road">현재 도로 확인 중</span>
+                            </div>
+                            <div class="nav-metrics">
+                                <div><span>남은 거리</span><strong id="navDistance">-</strong></div>
+                                <div><span>남은 시간</span><strong id="navTime">-</strong></div>
+                                <div><span>도착 예정</span><strong id="navArrival">-</strong></div>
+                            </div>
+                            <div class="nav-progress" aria-label="주행 진행도">
+                                <span id="navProgressBar"></span>
+                            </div>
+                            <div class="nav-controls">
+                                <button id="ttsButton" type="button" aria-pressed="true">음성 안내 켜짐</button>
+                                <button id="navigationStopButton" type="button">안내 종료</button>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="legend" aria-label="교통상태 범례">
+                        <span><i class="legend-dot smooth"></i>원활</span>
+                        <span><i class="legend-dot slow"></i>서행</span>
+                        <span><i class="legend-dot delay"></i>지체</span>
+                        <span><i class="legend-dot congested"></i>정체</span>
+                        <span><i class="legend-dot unknown"></i>정보없음</span>
+                    </div>
+                </div>
+
+                <div id="resultSummary" class="result-summary empty-state">
+                    <p>아직 탐색한 경로가 없습니다.</p>
+                </div>
+            </section>
+
+            <section id="tab-agent" class="tab-panel">
+                <div class="content-card">
+                    <div class="content-heading">
+                        <div>
+                            <span class="section-kicker">탐색 과정</span>
+                            <h2>경로를 선택한 과정</h2>
+                        </div>
+                    </div>
+                    <div id="agentTimeline" class="timeline empty-state">
+                        <p>경로 탐색 후 장소 검색, 경로 조회, 최종 판단 과정이 표시됩니다.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="tab-segments" class="tab-panel">
+                <div class="content-card">
+                    <div class="content-heading segment-heading">
+                        <div>
+                            <span class="section-kicker">교통 구간</span>
+                            <h2>도로별 세부 교통상태</h2>
+                        </div>
+                        <div id="segmentFilters" class="filters" aria-label="교통상태 필터"></div>
+                    </div>
+                    <div id="segmentMeta" class="segment-meta"></div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>도로</th>
+                                    <th>도로 유형</th>
+                                    <th>상태</th>
+                                    <th>속도</th>
+                                </tr>
+                            </thead>
+                            <tbody id="segmentTableBody">
+                                <tr><td colspan="4" class="empty-cell">경로 탐색 후 세부 구간이 표시됩니다.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </section>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/app.js?v=20261005-multi1"></script>
+</body>
+</html>
