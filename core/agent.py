@@ -468,11 +468,39 @@ class RouteAgent:
                                 time_change_min=rank[0]-before[0], distance_change_km=round(rank[1]-before[1], 1),
                                 improvement="improved" if rank < before else "equal" if rank == before else "worse")
                 blocks = find_congestion_blocks(ctx.routes["base"]["view"])
-                checks = [route_crosses_congestion_block(view, block) for block in blocks]
-                avoided = [i for i, result in enumerate(checks, 1) if result is False]
-                unknown = [i for i, result in enumerate(checks, 1) if result is None]
-                feedback.update(avoided_blocks=avoided, unverified_blocks=unknown,
-                                reentered_blocks=[i for i, result in enumerate(checks, 1) if result is True])
+                checks = [
+                    route_crosses_congestion_block(view, block)
+                    for block in blocks
+                ]
+
+                avoided = [
+                    i for i, result in enumerate(checks, 1)
+                    if result is False
+                ]
+                unknown = [
+                    i for i, result in enumerate(checks, 1)
+                    if result is None
+                ]
+                reentered = [
+                    i for i, result in enumerate(checks, 1)
+                    if result is True
+                ]
+
+                feedback.update(
+                    avoided_blocks=avoided,
+                    unverified_blocks=unknown,
+                    reentered_blocks=reentered,
+                )
+
+                target = definition.get("target_indexes", [])
+
+                # before_ 후보는 대상으로 지정된 정체 블록을
+                # 실제로 회피한 경우에만 추가 경로로 인정한다.
+                target_bypass_failed = bool(target) and any(
+                    index not in avoided
+                    for index in target
+                )
+
                 candidate_structure = route_structure_signature(summary)
                 duplicate = next(
                     (
@@ -487,14 +515,40 @@ class RouteAgent:
                     ),
                     None,
                 )
-                if duplicate:
-                    feedback["rejected_candidates"].append({"reason": "duplicate_route", "route_key": duplicate})
-                    # 같은 경로의 응답 수치 차이를 별도 경로 개선으로 홍보하지 않는다.
+                if target_bypass_failed:
+                    feedback["rejected_candidates"].append(
+                        {
+                            "reason": "target_congestion_not_avoided",
+                            "target_block_indexes": target,
+                            "reentered_blocks": [
+                                index for index in target
+                                if index in reentered
+                            ],
+                            "unverified_blocks": [
+                                index for index in target
+                                if index in unknown
+                            ],
+                        }
+                    )
+
+                    feedback["improvement"] = "bypass_failed"
+
+                elif duplicate:
+                    feedback["rejected_candidates"].append(
+                        {
+                            "reason": "duplicate_route",
+                            "route_key": duplicate,
+                        }
+                    )
                     feedback["improvement"] = "duplicate"
+
                 else:
-                    number = len([key for key in ctx.routes if key.startswith("alternative_")]) + 1
+                    number = len([
+                        key for key in ctx.routes
+                        if key.startswith("alternative_")
+                    ]) + 1
+
                     key = f"alternative_{number}"
-                    target = definition["target_indexes"]
                     refined = (extract_route_detour_waypoint(view, blocks[target[0]-1])
                                if len(target) == 1 and target[0] in avoided else None)
                     entry = store_route(key, raw, search_option, f"추가 경로 {number} · {SEARCH_OPTION_LABELS[search_option]}",
@@ -504,7 +558,13 @@ class RouteAgent:
                                 "refined_waypoint": refined, "avoided_block_indexes": avoided,
                                 "unverified_block_indexes": unknown, "gemini_plan_reason": plan["reason"]})
                     feedback["accepted_routes"].append(tool_route_payload(key, entry))
-                label = {"improved": "개선", "equal": "동일", "worse": "악화", "duplicate": "중복"}[feedback["improvement"]]
+                label = {
+                    "improved": "개선",
+                    "equal": "동일",
+                    "worse": "악화",
+                    "duplicate": "중복",
+                    "bypass_failed": "정체 회피 실패",
+                }[feedback["improvement"]]
                 ctx.add_event("evaluation", "경로 개선 여부", f"현재 최선 대비 {label} · 시간 {feedback['time_change_min']:+}분 · 거리 {feedback['distance_change_km']:+g} km")
             except (TMapError, ValueError, KeyError, TypeError) as exc:
                 feedback.update(improvement="unavailable", error=str(exc))
@@ -789,11 +849,11 @@ class RouteAgent:
 - 계획한 뒤 search_route(route_kind="alternative", search_option=계획한 값)를 호출합니다. 후보 하나의 실제 TMAP 결과를 받은 뒤 다음 행동을 결정합니다.
 - evaluation_feedback의 improvement, 시간·거리 변화, 회피·재통과·검증 불가 결과, 중복 또는 실패 이유를 사용합니다. 별도 평가용 LLM 호출은 만들지 않습니다.
 - 동일 경로 또는 구조적으로 같은 도로 구간 순서가 반환되면 별도 추가 경로로 취급하지 않습니다.
-- 추가 조회 결과가 중복 또는 악화이더라도 아직 조회하지 않은 다른 before_/departure_ 후보가 있고 탐색 횟수가 남아 있으면 실제 데이터에 근거해 다음 후보를 검토할 수 있습니다. 옵션만 바꾼 반복 조회는 하지 않습니다.
 - 개선된 경로를 얻었거나, 더 검토할 분기 후보가 없거나, 탐색 한도에 도달하면 finish_route로 종료할 수 있습니다.
-- 추가 후보가 남아 있거나 정체를 모두 회피하지 못했다는 이유만으로 재탐색하지 않습니다.
 - 같은 TMAP 요청은 반복하지 않으며 기존 최대 탐색 횟수 안에서 판단합니다. 오류 발생 시에도 이미 조회된 경로는 사용할 수 있습니다.
-- 정체를 회피하지 않은 실제 경로도 시간·거리 비교 후보입니다. 검증 불가를 회피 성공으로 설명하지 않습니다.
+- before_ 후보로 조회한 경로가 대상 정체 블록을 다시 통과하거나 회피 여부를 검증할 수 없으면 해당 결과는 추가 경로로 채택하지 않습니다.
+- 해당 before_ 후보가 실패했고 아직 조회하지 않은 다른 before_ 후보와 탐색 횟수가 남아 있으면 다음 후보를 검토합니다.
+- 대상 정체 블록을 실제로 회피한 경로만 우회 성공 경로로 취급합니다.
 - 분기 후보의 경유점은 도구가 제공한 좌표를 사용하며 출발 좌표는 바꾸지 않습니다.
 - OSM 분기 후보라는 이유만으로 통행 가능하거나 빠르다고 단정하지 않습니다. 최종 선택은 실제 TMAP 조회 결과를 사용합니다.
 - 최종 순위는 기존 분/km 단위로 소요시간 → 거리입니다. finish_route는 Python이 순위를 확정하므로 재선택 호출은 필요 없습니다.
